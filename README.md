@@ -1,2 +1,24 @@
 # cicdec
-A simple unpacker for Clickteam Install Creator installers
+Extract files from installers made with Clickteam Install Creator.
+
+### Usage
+
+`cicdec [<options>...] <installer> [<output_directory>]`
+
+If no output directory is specified, all files are extracted to a subdirectory named after the input file.
+
+##### Options
+
+| Switch       | Description                                                  |
+| ------------ | ------------------------------------------------------------ |
+| -v <version> | Extract as installer version <version>. Auto-detection might not always work correctly, so it is possible to explicitly set the installer version. Possible values are `20`, `30`, `40` |
+| -db          | Dump blocks. Save additional installer data like registry changes, license files and the uninstaller. This is considered raw data and might not be readable or usable. |
+| -si          | Simulate extraction without writing files to disk. Useful for debugging. |
+
+
+
+### Limitations
+
+- Installers, which contain multiple product versions, are not supported
+- Encrypted installers are not supported
+- Installer versions below 2.0.0.20 are untested and might not be supported. Please open an issue if you encounter an installer, which fails to extract

@@ -1,0 +1,19 @@
+2.1.0
+  Added 'Overwrite file?' prompt if output file already exists
+  Moved common functions to separate dll
+
+2.0.0
+  Added support for installer version 2.0.0.20
+  Added command line parameter to explicitly set the installer version instead of auto-detecting it
+  Fixed files being skipped if their names contain certain non-ASCII characters
+  Fixed extraction for installers with big external data files
+  Improved detetion of installer version
+
+1.1.0
+  Added support for installers with external data files
+
+1.0.1
+  Fixed crash if the installer contains dummy files
+
+1.0.0
+  Initial release

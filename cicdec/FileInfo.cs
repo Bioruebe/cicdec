@@ -55,7 +55,7 @@ namespace cicdec {
 		}
 
 		public bool IsValid(long fileStreamLength) {
-			if (offset > fileStreamLength || (compressedSize > 0 && uncompressedSize / compressedSize > 1000) || index > 1000000000) return false;
+			if (offset > fileStreamLength || (compressedSize == 0 && uncompressedSize > 3000000000) || index > 1000000000) return false;
 			return true;
 		}
 

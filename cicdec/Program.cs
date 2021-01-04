@@ -11,7 +11,7 @@ using BioLib.Streams;
 
 namespace cicdec {
 	class Program {
-		private const string VERSION = "2.1.1";
+		private const string VERSION = "2.1.2";
 		private const string PROMPT_ID = "cicdec_overwrite";
 
 		private const int SEARCH_BUFFER_SIZE = 1024 * 1024;
@@ -94,25 +94,27 @@ namespace cicdec {
 
 			if (fileListStream == null) Bio.Error("File list could not be read. Please send a bug report if you want the file to be supported in a future version.", Bio.EXITCODE.NOT_SUPPORTED);
 
-			if (dataBlockStartPosition > -1) {
-				ParseFileList(fileListStream, inputStreamLength);
-				ExtractFiles(inputStream, binaryReader);
-			}
-			else {
-				// Install Creator supports external data files, instead of integrating 
-				// the files into the executable. This actually means the data block is
-				// saved as a separate file, which we just need to read.
-				var dataFilePath = Path.Combine(Path.GetDirectoryName(inputFile), Path.GetFileNameWithoutExtension(inputFile) + ".D01");
-				if (!File.Exists(dataFilePath)) Bio.Error("Could not find data block in installer and there is no external data file.", Bio.EXITCODE.RUNTIME_ERROR);
-
+			// Install Creator supports external data files, instead of integrating 
+			// the files into the executable. This actually means the data block is
+			// saved as a separate file, which we just need to read.
+			var dataFilePath = Path.Combine(Path.GetDirectoryName(inputFile), Path.GetFileNameWithoutExtension(inputFile) + ".D01");
+			if (File.Exists(dataFilePath)) {
 				Bio.Debug("External data file found");
-				using (var dataFileStream = File.OpenRead(dataFilePath)) {
-					ParseFileList(fileListStream, dataFileStream.Length);
-					using (var dataFileBinaryReader = new BinaryReader(dataFileStream)) {
-						dataBlockStartPosition = 0;
-						ExtractFiles(dataFileStream, dataFileBinaryReader);
+				using (var dataFileStream = File.OpenRead(dataFilePath))
+				using (var offsetStream = new OffsetStream(dataFileStream, 4)) // Data files seem to have a 4 byte header
+				using (var concatenatedStream = inputStream.Concatenate(offsetStream)) {
+					ParseFileList(fileListStream, concatenatedStream.Length);
+					using (var concatenatedStreamBinaryReader = new BinaryReader(concatenatedStream)) {
+						ExtractFiles(concatenatedStream, concatenatedStreamBinaryReader);
 					}
 				}
+			}
+			else if (dataBlockStartPosition < 0) {
+				Bio.Error("Could not find data block in installer and there is no external data file. The installer is likely corrupt.", Bio.EXITCODE.RUNTIME_ERROR);
+			}
+			else {
+				ParseFileList(fileListStream, inputStreamLength);
+				ExtractFiles(inputStream, binaryReader);
 			}
 
 			if (failedExtractions > 0) {
@@ -283,16 +285,16 @@ namespace cicdec {
 		}
 
 		static bool SaveToFile(Stream stream, string fileName, FileInfo fileInfo = null) {
-			if (simulate) return true;
-
 			if (stream == null) {
 				Bio.Warn("Failed to save stream to file. Stream is null");
 				return false;
 			}
 
+			if (simulate) return true;
+
 			stream.MoveToStart();
 			var filePath = Path.Combine(outputDirectory, fileName);
-			//Bio.Cout("Saving decompressed block to " + outputFilePath);
+			//Bio.Cout("Saving decompressed block to " + filePath);
 
 			try {
 				if (!stream.WriteToFile(filePath, PROMPT_ID)) return true;
@@ -448,9 +450,11 @@ namespace cicdec {
 			
 			for (var i = 0; i < filesInfos.Count; i++) {
 				var fileInfo = filesInfos[i];
+				//Bio.Tout(fileInfo, Bio.LOG_SEVERITY.DEBUG);
 				Bio.Debug(fileInfo);
 				inputStream.Position = dataBlockStartPosition + fileInfo.offset + 4;
 				Bio.Cout(string.Format("{0}/{1}\t{2}", i + 1, filesInfos.Count, fileInfo.path));
+				//Bio.Cout(inputStream);
 
 				// Empty files
 				if (fileInfo.uncompressedSize == 0) {

@@ -11,7 +11,7 @@ using BioLib.Streams;
 
 namespace cicdec {
 	class Program {
-		private const string VERSION = "2.1.2";
+		private const string VERSION = "2.2.0";
 		private const string PROMPT_ID = "cicdec_overwrite";
 
 		private const int SEARCH_BUFFER_SIZE = 1024 * 1024;
@@ -35,7 +35,7 @@ namespace cicdec {
 								 "  -v <version>\tExtract as installer version <version>. Auto-detection might not always work correctly, so it is possible to explicitly set the installer version.\n\n" + 
 								 "  -db\tDump blocks. Save additional installer data like registry changes, license files and the uninstaller. This is considered raw data and might not be readable or usable.\n\n" + 
 								 "  -si\tSimulate extraction without writing files to disk.";
-			Bio.Header("cicdec - A Clickteam Install Creator unpacker", VERSION, "2019-2020", "Extracts files from installers made with Clickteam Install Creator", USAGE);
+			Bio.Header("cicdec - A Clickteam Install Creator unpacker", VERSION, "2019-2021", "Extracts files from installers made with Clickteam Install Creator", USAGE);
 			
 			inputFile = ParseCommandLine(args);
 			var inputStream = File.OpenRead(inputFile);
@@ -190,9 +190,10 @@ namespace cicdec {
 			long dataStreamLength) {
 			if (installerVersion > -1) return installerVersion;
 
-			if (TestInstallerVersion("40 - Free", TryParse40, decompressedStream, binaryReader, fileNumber, dataStreamLength)) return 40;
-			if (TestInstallerVersion("30 - Pro", TryParse30, decompressedStream, binaryReader, fileNumber, dataStreamLength)) return 30;
-			if (TestInstallerVersion("20 - Legacy", TryParse20, decompressedStream, binaryReader, fileNumber, dataStreamLength)) return 20;
+			if (TestInstallerVersion("40", TryParse40, decompressedStream, binaryReader, fileNumber, dataStreamLength)) return 40;
+			if (TestInstallerVersion("35", TryParse35, decompressedStream, binaryReader, fileNumber, dataStreamLength)) return 35;
+			if (TestInstallerVersion("30", TryParse30, decompressedStream, binaryReader, fileNumber, dataStreamLength)) return 30;
+			if (TestInstallerVersion("20", TryParse20, decompressedStream, binaryReader, fileNumber, dataStreamLength)) return 20;
 
 			Bio.Error($"Failed to determine installer version. Please send a bug report if you want the file to be supported in a future version.", Bio.EXITCODE.NOT_SUPPORTED);
 			return -1;
@@ -325,6 +326,9 @@ namespace cicdec {
 			if (installerVersion >= 40) {
 				parsingFunction = TryParse40;
 			}
+			else if (installerVersion >= 35) {
+				parsingFunction = TryParse35;
+			}
 			else if (installerVersion >= 30) {
 				parsingFunction = TryParse30;
 			}
@@ -385,6 +389,31 @@ namespace cicdec {
 			fileInfo.SetFileInfos(binaryReader.ReadUInt32(), binaryReader.ReadUInt32(), binaryReader.ReadUInt32(), binaryReader.ReadUInt32());
 			decompressedStream.Skip(18);
 			fileInfo.index = binaryReader.ReadUInt32();
+			fileInfo.SetFileTimes(binaryReader.ReadInt64(), binaryReader.ReadInt64(), binaryReader.ReadInt64());
+
+			ReadFilePath(decompressedStream, binaryReader, fileInfo);
+
+			return fileInfo;
+		}
+
+		static FileInfo TryParse35(Stream decompressedStream, BinaryReader binaryReader) {
+			var fileInfo = new FileInfo(decompressedStream.Position, binaryReader.ReadUInt32(), binaryReader.ReadUInt16());
+			if (fileInfo.type != 0) return fileInfo;
+
+			decompressedStream.Skip(3);
+
+			// Empty files, see TryParse40
+			if (binaryReader.ReadByte() == 0xE2) {
+				decompressedStream.Skip(30);
+			}
+			else {
+				decompressedStream.Skip(14);
+			}
+
+			var decompressedSize = binaryReader.ReadUInt32();
+			fileInfo.SetFileInfos(binaryReader.ReadUInt32(), binaryReader.ReadUInt32(), binaryReader.ReadUInt32(), decompressedSize);
+			fileInfo.index = binaryReader.ReadUInt32();
+			decompressedStream.Skip(2);
 			fileInfo.SetFileTimes(binaryReader.ReadInt64(), binaryReader.ReadInt64(), binaryReader.ReadInt64());
 
 			ReadFilePath(decompressedStream, binaryReader, fileInfo);

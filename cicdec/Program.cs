@@ -11,10 +11,9 @@ using BioLib.Streams;
 
 namespace cicdec {
 	class Program {
-		private const string VERSION = "2.2.0";
+		private const string VERSION = "2.3.0";
 		private const string PROMPT_ID = "cicdec_overwrite";
 
-		private const int SEARCH_BUFFER_SIZE = 1024 * 1024;
 		private const int BLOCK_HEADER_SIZE = 16 + 16 + 32;
 		private static readonly byte[] DATA_SECTION_SIGNATURE = {0x77, 0x77, 0x67, 0x54, 0x29, 0x48};
 
@@ -24,7 +23,7 @@ namespace cicdec {
 		private static bool simulate;
 		private static int installerVersion = -1;
 
-		private static MemoryStream fileListStream;
+		private static Stream fileListStream;
 		private static List<FileInfo> filesInfos;
 		private static long dataBlockStartPosition = -1;
 		private static int failedExtractions = 0;
@@ -44,12 +43,10 @@ namespace cicdec {
 
 			// First we need to find the data section. The simplest way to do so
 			// is searching for the signature 0x77, 0x77, 0x67, 0x54, 0x29, 0x48
-			var startOffset = FindStartOffset(binaryReader);
-			if (startOffset < 0) Bio.Error("Failed to find overlay signature.", Bio.EXITCODE.INVALID_INPUT);
+			if (!inputStream.Find(DATA_SECTION_SIGNATURE)) Bio.Error("Failed to find overlay signature.", Bio.EXITCODE.INVALID_INPUT);
+			inputStream.Skip(DATA_SECTION_SIGNATURE.Length);
 
-			Bio.Cout("Starting extraction at offset " + startOffset + "\n");
-
-			inputStream.Position = startOffset;
+			Bio.Cout("Starting extraction at offset " + inputStream.Position + "\n");
 
 			// The data section consists of a varying number of data blocks,
 			// whose headers give information about the type of data contained inside.
@@ -97,12 +94,11 @@ namespace cicdec {
 			// Install Creator supports external data files, instead of integrating 
 			// the files into the executable. This actually means the data block is
 			// saved as a separate file, which we just need to read.
-			var dataFilePath = Path.Combine(Path.GetDirectoryName(inputFile), Path.GetFileNameWithoutExtension(inputFile) + ".D01");
-			if (File.Exists(dataFilePath)) {
-				Bio.Debug("External data file found");
-				using (var dataFileStream = File.OpenRead(dataFilePath))
-				using (var offsetStream = new OffsetStream(dataFileStream, 4)) // Data files seem to have a 4 byte header
-				using (var concatenatedStream = inputStream.Concatenate(offsetStream)) {
+			var dataFiles = FindDataFiles();
+			if (dataFiles.Count > 0) {
+				using (var concatenatedStream = inputStream.Concatenate(dataFiles)) {
+					Bio.Debug($"{dataFiles.Count - 1} data files read. Total length: {concatenatedStream.Length}");
+
 					ParseFileList(fileListStream, concatenatedStream.Length);
 					using (var concatenatedStreamBinaryReader = new BinaryReader(concatenatedStream)) {
 						ExtractFiles(concatenatedStream, concatenatedStreamBinaryReader);
@@ -126,6 +122,30 @@ namespace cicdec {
 			}
 
 			Bio.Pause();
+		}
+
+		static List<Stream> FindDataFiles() {
+			var directory = Path.GetDirectoryName(inputFile);
+			var baseFileName = Path.GetFileNameWithoutExtension(inputFile);
+
+			var i = 1;
+			var dataFiles = new List<Stream>();
+
+			while (true) {
+				var dataFile = baseFileName + $".D{i:00}";
+				var dataFilePath = Path.Combine(directory, dataFile);
+
+				if (!File.Exists(dataFilePath)) break;
+
+				Bio.Debug("Found data file " + dataFile);
+				var dataFileStream = File.OpenRead(dataFilePath);
+				var offsetStream = new OffsetStream(dataFileStream, 4);
+				dataFiles.Add(offsetStream);
+
+				i++;
+			}
+
+			return dataFiles;
 		}
 
 		static string ParseCommandLine(string[] args) {
@@ -186,8 +206,7 @@ namespace cicdec {
 			return inputFile;
 		}
 
-		static int GetInstallerVersion(Stream decompressedStream, BinaryReader binaryReader, ushort fileNumber,
-			long dataStreamLength) {
+		static int GetInstallerVersion(Stream decompressedStream, BinaryReader binaryReader, ushort fileNumber, long dataStreamLength) {
 			if (installerVersion > -1) return installerVersion;
 
 			if (TestInstallerVersion("40", TryParse40, decompressedStream, binaryReader, fileNumber, dataStreamLength)) return 40;
@@ -229,49 +248,28 @@ namespace cicdec {
 			return true;
 		}
 
-		static int FindStartOffset(BinaryReader binaryReader) {
-			byte[] buffer = new byte[SEARCH_BUFFER_SIZE];
-			binaryReader.Read(buffer, 0, SEARCH_BUFFER_SIZE);
-
-			for (int i = 0; i < SEARCH_BUFFER_SIZE; i++) {
-				if (Match(buffer, i, DATA_SECTION_SIGNATURE)) return i + DATA_SECTION_SIGNATURE.Length;
-			}
-
-			return -1;
-		}
-
-		static bool Match(byte[] array, int pos, byte[] pattern) {
-			if (pattern.Length > array.Length - pos) return false;
-
-			for (int i = 0; i < pattern.Length; i++) {
-				if (array[pos + i] != pattern[i]) return false;
-			}
-
-			return true;
-		}
-
-		static MemoryStream UnpackStream(BinaryReader binaryReader, uint blockSize, uint decompressedSize = 0, byte compressionMethod = byte.MaxValue) {
+		static Stream UnpackStream(BinaryReader binaryReader, uint blockSize, uint decompressedSize = 0, Stream decompressedStream = null) {
 			if (decompressedSize == 0) decompressedSize = binaryReader.ReadUInt32();
-			if (compressionMethod == byte.MaxValue) compressionMethod = binaryReader.ReadByte();
+			var compressionMethod = (COMPRESSION) binaryReader.ReadByte();
 			Bio.Debug("Decompressing " + blockSize + " bytes @ " + binaryReader.BaseStream.Position);
-			Bio.Debug(string.Format("\tCompression: {0}, decompressed size: {1}", (COMPRESSION) compressionMethod, decompressedSize));
+			Bio.Debug(string.Format("\tCompression: {0}, decompressed size: {1}", compressionMethod, decompressedSize));
 			blockSize -= 5;
-			var decompressedStream = new MemoryStream((int) decompressedSize);
+			if (decompressedStream == null) decompressedStream = new MemoryStream((int) decompressedSize);
 
-			switch ((COMPRESSION) compressionMethod) {
+			switch (compressionMethod) {
 				case COMPRESSION.NONE:
 					binaryReader.BaseStream.Copy(decompressedStream, (int) blockSize);
 					break;
 				case COMPRESSION.DEFLATE:
 					binaryReader.BaseStream.Skip(2);
 					using (var deflateStream = new DeflateStream(binaryReader.BaseStream, CompressionMode.Decompress, true)) {
-						deflateStream.Copy(decompressedStream, (int) decompressedSize);
+						deflateStream.Copy(decompressedStream, decompressedSize);
 					}
 					break;
 				case COMPRESSION.BZ2:
 					using (var bzip2Stream = new BZip2InputStream(binaryReader.BaseStream)) {
 						bzip2Stream.IsStreamOwner = false;
-						bzip2Stream.Copy(decompressedStream, (int) decompressedSize);
+						bzip2Stream.Copy(decompressedStream, decompressedSize);
 					}
 					break;
 				default:
@@ -285,6 +283,17 @@ namespace cicdec {
 			return decompressedStream;
 		}
 
+		static bool UnpackStreamToFile(string filePath, BinaryReader binaryReader, uint blockSize, uint decompressedSize = 0) {
+			if (simulate) return true;
+
+			using (var fileStream = Bio.CreateFile(filePath, PROMPT_ID)) {
+				if (fileStream == null) return false;
+				UnpackStream(binaryReader, blockSize, decompressedSize, fileStream);
+			}
+
+			return true;
+		}
+
 		static bool SaveToFile(Stream stream, string fileName, FileInfo fileInfo = null) {
 			if (stream == null) {
 				Bio.Warn("Failed to save stream to file. Stream is null");
@@ -294,23 +303,26 @@ namespace cicdec {
 			if (simulate) return true;
 
 			stream.MoveToStart();
-			var filePath = Path.Combine(outputDirectory, fileName);
+			var filePath = Bio.GetSafeOutputPath(outputDirectory, fileName);
 			//Bio.Cout("Saving decompressed block to " + filePath);
 
 			try {
 				if (!stream.WriteToFile(filePath, PROMPT_ID)) return true;
 
-				if (fileInfo != null) {
-					File.SetCreationTime(filePath, fileInfo.created);
-					File.SetLastAccessTime(filePath, fileInfo.accessed);
-					File.SetLastWriteTime(filePath, fileInfo.modified);
-				}
+				SetFileAttributes(filePath, fileInfo);
 			}
 			catch (Exception e) {
 				Bio.Warn("Failed to create file:" + e.Message);
 				return false;
 			}
 
+			return true;
+		}
+
+		static bool SetFileAttributes(string path, FileInfo fileInfo) {
+			if (fileInfo == null) return false;
+
+			Bio.FileSetTimes(path, fileInfo.created, fileInfo.accessed, fileInfo.modified);
 			return true;
 		}
 
@@ -494,9 +506,9 @@ namespace cicdec {
 				}
 
 				try {
-					using (var fileData = UnpackStream(binaryReader, fileInfo.compressedSize - 7, fileInfo.uncompressedSize)) {
-						if (!SaveToFile(fileData, fileInfo.path, fileInfo)) throw new StreamUnsupportedException("Failed to decompress data");
-					}
+					var filePath = Bio.GetSafeOutputPath(outputDirectory, fileInfo.path);
+					if (!UnpackStreamToFile(filePath, binaryReader, fileInfo.compressedSize - 7, fileInfo.uncompressedSize)) throw new StreamUnsupportedException();
+					SetFileAttributes(filePath, fileInfo);
 				}
 				catch (Exception e) {
 					Bio.Warn("Failed to decompress file, exception was " + e.Message);

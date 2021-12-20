@@ -1,7 +1,18 @@
+3.0.0
+  Added support for another installer version
+  Added '-dfb' command line parameter to extract file data block
+  Changed '-db' command line parameter to not extract the file block per default
+  Fixed crash if the installer contains unknown data blocks
+  Fixed crash when using the '-si' command line option
+  Improved installer version detection
+  Updated BioLib to 2.3.2
+  Updated SharpZipLib to 1.3.3
+
 2.3.0
   Added support for installers containing files bigger than ~2 GB
   Fixed extraction for installers with more than one data file
   Reduced memory usage during extraction
+  Updated BioLib to 2.3.0
 
 2.2.0
   Added support for another installer version, thanks to sjkorvin

@@ -11,7 +11,7 @@ using BioLib.Streams;
 
 namespace cicdec {
 	class Program {
-		private const string VERSION = "2.3.0";
+		private const string VERSION = "3.0.0";
 		private const string PROMPT_ID = "cicdec_overwrite";
 
 		private const int BLOCK_HEADER_SIZE = 16 + 16 + 32;
@@ -20,6 +20,7 @@ namespace cicdec {
 		private static string inputFile;
 		private static string outputDirectory;
 		private static bool dumpBlocks;
+		private static bool dumpFileBlock;
 		private static bool simulate;
 		private static int installerVersion = -1;
 
@@ -33,6 +34,7 @@ namespace cicdec {
 								 "<options>:\n" + 
 								 "  -v <version>\tExtract as installer version <version>. Auto-detection might not always work correctly, so it is possible to explicitly set the installer version.\n\n" + 
 								 "  -db\tDump blocks. Save additional installer data like registry changes, license files and the uninstaller. This is considered raw data and might not be readable or usable.\n\n" + 
+								 "  -dfb\tDump file block. This is raw binary data containing all files in compressed form and only useful for debugging purposes.\n\n" + 
 								 "  -si\tSimulate extraction without writing files to disk.";
 			Bio.Header("cicdec - A Clickteam Install Creator unpacker", VERSION, "2019-2021", "Extracts files from installers made with Clickteam Install Creator", USAGE);
 			
@@ -63,7 +65,7 @@ namespace cicdec {
 					// Data block should always be last, but better be safe and parse all other blocks before
 					dataBlockStartPosition = inputStream.Position;
 					
-					if (dumpBlocks) {
+					if (dumpFileBlock) {
 						using (var ms = inputStream.Extract((int)blockSize)) {
 							SaveToFile(ms, outputFileName);
 						}
@@ -172,9 +174,13 @@ namespace cicdec {
 				var arg = args[i];
 				Bio.Debug("Argument: " + arg);
 				switch (arg) {
-					case "--dumpblocks":
+					case "--dump-blocks":
 					case "-db":
 						dumpBlocks = true;
+						break;
+					case "--dump-file-block":
+					case "-dfb":
+						dumpFileBlock = true;
 						break;
 					case "--simulate":
 					case "-si":
@@ -209,16 +215,17 @@ namespace cicdec {
 		static int GetInstallerVersion(Stream decompressedStream, BinaryReader binaryReader, ushort fileNumber, long dataStreamLength) {
 			if (installerVersion > -1) return installerVersion;
 
-			if (TestInstallerVersion("40", TryParse40, decompressedStream, binaryReader, fileNumber, dataStreamLength)) return 40;
-			if (TestInstallerVersion("35", TryParse35, decompressedStream, binaryReader, fileNumber, dataStreamLength)) return 35;
-			if (TestInstallerVersion("30", TryParse30, decompressedStream, binaryReader, fileNumber, dataStreamLength)) return 30;
-			if (TestInstallerVersion("20", TryParse20, decompressedStream, binaryReader, fileNumber, dataStreamLength)) return 20;
+			if (TestInstallerVersion(40, TryParse40, decompressedStream, binaryReader, fileNumber, dataStreamLength)) return 40;
+			if (TestInstallerVersion(35, TryParse35, decompressedStream, binaryReader, fileNumber, dataStreamLength)) return 35;
+			if (TestInstallerVersion(30, TryParse30, decompressedStream, binaryReader, fileNumber, dataStreamLength)) return 30;
+			if (TestInstallerVersion(24, TryParse24, decompressedStream, binaryReader, fileNumber, dataStreamLength)) return 24;
+			if (TestInstallerVersion(20, TryParse20, decompressedStream, binaryReader, fileNumber, dataStreamLength)) return 20;
 
 			Bio.Error($"Failed to determine installer version. Please send a bug report if you want the file to be supported in a future version.", Bio.EXITCODE.NOT_SUPPORTED);
 			return -1;
 		}
 
-		static bool TestInstallerVersion(string version, Func<Stream, BinaryReader, FileInfo> parsingFunction, Stream decompressedStream, BinaryReader binaryReader, int fileNumber, long dataStreamLength) {
+		static bool TestInstallerVersion(int version, Func<Stream, BinaryReader, FileInfo> parsingFunction, Stream decompressedStream, BinaryReader binaryReader, int fileNumber, long dataStreamLength) {
 			Bio.Debug($"\nTesting installer version {version}\n");
 			var pos = decompressedStream.Position;
 
@@ -254,7 +261,16 @@ namespace cicdec {
 			Bio.Debug("Decompressing " + blockSize + " bytes @ " + binaryReader.BaseStream.Position);
 			Bio.Debug(string.Format("\tCompression: {0}, decompressed size: {1}", compressionMethod, decompressedSize));
 			blockSize -= 5;
-			if (decompressedStream == null) decompressedStream = new MemoryStream((int) decompressedSize);
+
+			if (decompressedStream == null) {
+				if (decompressedSize > int.MaxValue) {
+					Bio.Warn("Block size exceeds limit. Skipping block.");
+					binaryReader.BaseStream.Skip(blockSize);
+					return null;
+				}
+
+				decompressedStream = new MemoryStream((int)decompressedSize);
+			}
 
 			switch (compressionMethod) {
 				case COMPRESSION.NONE:
@@ -320,7 +336,7 @@ namespace cicdec {
 		}
 
 		static bool SetFileAttributes(string path, FileInfo fileInfo) {
-			if (fileInfo == null) return false;
+			if (fileInfo == null || simulate) return false;
 
 			Bio.FileSetTimes(path, fileInfo.created, fileInfo.accessed, fileInfo.modified);
 			return true;
@@ -334,7 +350,7 @@ namespace cicdec {
 			Bio.Cout("\n" + fileNumber + " files in installer\n");
 
 			installerVersion = GetInstallerVersion(decompressedStream, binaryReader, fileNumber, dataStreamLength);
-			Func<Stream, BinaryReader, FileInfo> parsingFunction = TryParse30;
+			Func<Stream, BinaryReader, FileInfo> parsingFunction = null;
 			if (installerVersion >= 40) {
 				parsingFunction = TryParse40;
 			}
@@ -343,6 +359,9 @@ namespace cicdec {
 			}
 			else if (installerVersion >= 30) {
 				parsingFunction = TryParse30;
+			}
+			else if (installerVersion >= 24) {
+				parsingFunction = TryParse24;
 			}
 			else if (installerVersion >= 20) {
 				parsingFunction = TryParse20;
@@ -356,7 +375,10 @@ namespace cicdec {
 				var fileInfo = parsingFunction(decompressedStream, binaryReader);
 				Bio.Debug(string.Format("Node {0} at offset {1}, size: {2}, end: {3}", i, fileInfo.nodeStart, fileInfo.nodeSize, fileInfo.nodeEnd));
 
-				if (!fileInfo.IsValid(dataStreamLength)) Bio.Error($"The file could not be extracted as installer version {installerVersion}. Please try to manually set the correct version using the command line switch -v.", Bio.EXITCODE.RUNTIME_ERROR);
+				if (!fileInfo.IsValid(dataStreamLength)) {
+					Bio.Debug(fileInfo);
+					Bio.Error($"The file could not be extracted as installer version {installerVersion}. Please try to manually set the correct version using the command line switch -v.", Bio.EXITCODE.RUNTIME_ERROR);
+				}
 
 #if DEBUG
 				if (dumpBlocks) {
@@ -380,6 +402,22 @@ namespace cicdec {
 		}
 
 		static FileInfo TryParse20(Stream decompressedStream, BinaryReader binaryReader) {
+			var fileInfo = new FileInfo(decompressedStream.Position, binaryReader.ReadUInt32(), binaryReader.ReadUInt16());
+			if (fileInfo.type != 0) return fileInfo;
+
+			decompressedStream.Skip(14);
+			var uncompressed = binaryReader.ReadUInt32();
+			var offset = binaryReader.ReadUInt32();
+			var compressed = binaryReader.ReadUInt32();
+			fileInfo.SetFileInfos(offset, compressed, 0, uncompressed);
+			fileInfo.SetFileTimes(binaryReader.ReadInt64(), binaryReader.ReadInt64(), binaryReader.ReadInt64());
+
+			ReadFilePath(decompressedStream, binaryReader, fileInfo);
+
+			return fileInfo;
+		}
+
+		static FileInfo TryParse24(Stream decompressedStream, BinaryReader binaryReader) {
 			var fileInfo = new FileInfo(decompressedStream.Position, binaryReader.ReadUInt16(), binaryReader.ReadUInt16());
 			if (fileInfo.type != 0) return fileInfo;
 

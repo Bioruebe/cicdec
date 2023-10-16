@@ -1,3 +1,6 @@
+3.0.1
+  Updated BioLib to 2.5.0
+
 3.0.0
   Added support for another installer version
   Added '-dfb' command line parameter to extract file data block

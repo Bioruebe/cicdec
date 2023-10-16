@@ -11,7 +11,7 @@ using BioLib.Streams;
 
 namespace cicdec {
 	class Program {
-		private const string VERSION = "3.0.0";
+		private const string VERSION = "3.0.1";
 		private const string PROMPT_ID = "cicdec_overwrite";
 
 		private const int BLOCK_HEADER_SIZE = 16 + 16 + 32;
@@ -259,7 +259,7 @@ namespace cicdec {
 			if (decompressedSize == 0) decompressedSize = binaryReader.ReadUInt32();
 			var compressionMethod = (COMPRESSION) binaryReader.ReadByte();
 			Bio.Debug("Decompressing " + blockSize + " bytes @ " + binaryReader.BaseStream.Position);
-			Bio.Debug(string.Format("\tCompression: {0}, decompressed size: {1}", compressionMethod, decompressedSize));
+			Bio.Debug(string.Format("\tCompression: {0:X}, decompressed size: {1}", compressionMethod, decompressedSize));
 			blockSize -= 5;
 
 			if (decompressedStream == null) {
@@ -303,7 +303,7 @@ namespace cicdec {
 			if (simulate) return true;
 
 			using (var fileStream = Bio.CreateFile(filePath, PROMPT_ID)) {
-				if (fileStream == null) return false;
+				if (fileStream == null) return true;
 				UnpackStream(binaryReader, blockSize, decompressedSize, fileStream);
 			}
 
@@ -328,7 +328,7 @@ namespace cicdec {
 				SetFileAttributes(filePath, fileInfo);
 			}
 			catch (Exception e) {
-				Bio.Warn("Failed to create file:" + e.Message);
+				Bio.Warn("Failed to create file: " + e.Message);
 				return false;
 			}
 
@@ -545,6 +545,8 @@ namespace cicdec {
 
 				try {
 					var filePath = Bio.GetSafeOutputPath(outputDirectory, fileInfo.path);
+					if (filePath == null) continue;
+
 					if (!UnpackStreamToFile(filePath, binaryReader, fileInfo.compressedSize - 7, fileInfo.uncompressedSize)) throw new StreamUnsupportedException();
 					SetFileAttributes(filePath, fileInfo);
 				}
